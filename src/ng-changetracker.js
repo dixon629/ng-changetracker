@@ -9,84 +9,83 @@
 			factory.rewatch: rewatch,
 			factory.reset: reset,
 			factory.clear: clear,
-			factory.clearScopeChangeCache: clearScopeChangeCache,
-			factory.hasChangesOnGlobalScope: hasChangesOnGlobalScope,
+			factory.clearAll: clearScopeChangeCache,
+			factory.hasChanges: hasChanges,
 			factory.hasChangesOnScope: hasChangesOnScope,
 			factory.intercept: intercept,
 			factory.onNavigateAway: onNavigateAway,
 			factory.interceptLogout: interceptLogout,
 		};
 
-		factory.scopeChangeCache = {};
-
+		factory.scopeChangeMap = {};
 		return factory;
 
-		function rewatch(scope, model, ignored) {
-			clear(scope);
-			watch(scope, model, ignoredProperties);
-		}
-
-		function watch(scope, model, ignored) {
-			if (angular.isArray(model)) {
-				for (var index in model) {
-					if (angular.isString(model[index])) {
-						watchModel(scope, model[index], ignored);
+		function watch(scope, tragets, ignored) {
+			if (angular.isArray(tragets)) {
+				for (var index in tragets) {
+					var modelName = tragets[index];
+					if (angular.isString(modelName)) {
+						watchModel(scope, modelName, ignored);
 					} else {
-						console.log('Invalide model name:' + model[index]);
+						console.log('Invalide model name:' + tragets[index]);
 					}
 				}
-			} else if (angular.isString(model)) {
-				watchModel(scope, model, ignored);
+			} else if (angular.isString(tragets)) {
+				watchModel(scope, tragets, ignored);
 			} else {
-				console.log('Invalide model name:' + model);
+				console.log('Invalide model name:' + tragets);
 			}
 		}
 
-		function watchModel(scope, model, ignored) {
-			if (angular.isUndefined(factory.scopeChangeCache[scope.$id])) {
-				factory.scopeChangeCache[scope.$id] = {
+		function rewatch(scope, tragets, ignored) {
+			clear(scope);
+			watch(scope, tragets, ignoredProperties);
+		}
+
+		function watchModel(scope, modelName, ignored) {
+			if (angular.isUndefined(factory.scopeChangeMap[scope.$id])) {
+				factory.scopeChangeMap[scope.$id] = {
 					hasChanges: false,
 					scope: scope
 				};
 			}
-
 			//Define a change tracker on scope 
 			if (angular.isUndefined(scope.tracker)) {
 				scope.tracker = {};
 			}
 
 			//Remove old watch on the tracker
-			if (scope.tracker[model] && scope.tracker[model].unwatch) {
-				scope.tracker[model].unwatch();
+			if (scope.tracker[modelName] && scope.tracker[modelName].unwatch) {
+				scope.tracker[modelName].unwatch();
 			}
 
+			//Tracker model
 			var modelTracker = {};
-			modelTracker.original = angular.copy(_getValueFromScope(scope, model));
+			modelTracker.original = angular.copy(evaluateModelValue(scope, modelName));
 			modelTracker.hasChanges = false;
-			scope.tracker[model] = modelTracker;
-
-			scope.hasChanges = detectScopeChanges(scope);
-			_onScopeChangeTrackerChange(scope);
-
-			scope.tracker[model].unwatch = scope.$watch(model, function(newValue, oldValue) {
+			modelTracker.unwatch = scope.$watch(modelName, function(newValue, oldValue) {
 				if (newValue != oldValue) {
-					var originalObject = scope.tracker[model].original;
-					var currentObject = _getValueFromScope(scope, model);
-					scope.tracker[model].hasChanges = !equals(currentObject, originalObject, ignoredProperties);
+					var original = scope.tracker[model].original;
+					var current = evaluateModelValue(scope, model);
+					scope.tracker[model].hasChanges = !equals(current, original, ignored);
 					if (scope.tracker[model].hasChanges) {
 						scope.hasChanges = true;
-						_onScopeChangeTrackerChange(scope);
+						onScopeChanged(scope);
 					} else {
-						scope.hasChanges = _detectScopeChanges(scope);
-						_onScopeChangeTrackerChange(scope);
+						scope.hasChanges = hasChangesOnScope(scope);
+						onScopeChanged(scope);
 					}
 				}
 			}, true);
-
+			scope.tracker[modelName]= modelTracker;
+			
+			//Set scope change status
+			scope.hasChanges = hasChangesOnScope(scope);
+			onScopeChanged(scope);
 		}
 
 
-		function evaluateModel(scope, modelName) {
+		function evaluateModelValue(scope, modelName) {
 			var attributes = modelName.split('.');
 			if (attributes.length == 0)
 				return;
@@ -107,13 +106,13 @@
 			onScopeChangeTrackerChange(scope);
 
 			angular.forEach(scope.tracker, function(value, key) {
-				var current = evaluateModel(scope, key);
+				var current = evaluateModelValue(scope, key);
 				value.original = angular.copy(current);
 				value.hasChanges = false;
 			});
 		}
 
-		function clear() {
+		function clear(scope) {
 			scope.hasChanges = false;
 			onScopeChangeTrackerChange(scope);
 
@@ -125,18 +124,18 @@
 			scope.tracker = {};
 		}
 
-		function clearScopeChangeCache() {
-			for (var scopeId in factory.scopeChangeCache) {
-				var scope = scopeChangeCache[scopeId].scope
+		function clearAll() {
+			for (var scopeId in factory.scopeChangeMap) {
+				var scope = scopeChangeMap[scopeId].scope
 				if (scope) {
 					clear(scope);
 				}
 			}
 		}
 
-		function hasChangesOnGlobalScope() {
-			for (var scopeId in factory.scopeChangeCache) {
-				if (scopeChangeCache[scopeId].hasChanges) {
+		function hasChanges() {
+			for (var scopeId in factory.scopeChangeMap) {
+				if (scopeChangeMap[scopeId].hasChanges) {
 					return true;
 				}
 			}
@@ -153,14 +152,14 @@
 			return false;
 		}
 
-		function updateScopeChangeCache(scope) {
-			if (angular.isUndefined(factory.scopeChangeCache[scope.$id])) {
-				factory.scopeChangeCache[scope.$id] = {
+		function onScopeChanged(scope) {
+			if (angular.isUndefined(factory.scopeChangeMap[scope.$id])) {
+				factory.scopeChangeMap[scope.$id] = {
 					hasChanges: false,
 					scope: scope
 				};
 			}
-			factory.scopeChangeCache[scope.$id].hasChanges = scope.hasChanges;
+			factory.scopeChangeMap[scope.$id].hasChanges = scope.hasChanges;
 		};
 
 		function intercept(scope, confirmCallback, cancelCallback) {
@@ -180,7 +179,7 @@
 			if (factory.hasChangesInAllScopes()) {
 				if (window.confirm(_confirmationMessage)) {
 					//clear all changes in scopes as it will log out
-					factory.clearAllScopeChanges();
+					clearAll();
 					callback();
 				}
 			} else {
