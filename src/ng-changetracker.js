@@ -1,341 +1,391 @@
-(function() {
-	'use strict';
+'use strict';
 
-	angular.module('ngChangeTracker', []).factory('ngChangeTracker', ngChangeTracker);
+angular.module('changeTracker', [])
+    .factory('changeTracker', function ($log) {
+        var exports = {
+            watch: watch,
+            hasChangesOnScope: hasChangesOnScope,
+            hasChanges: hasChanges,
+            reset: reset,
+            clear: clear,
+            clearAll: clearAll,
+            updateModelChanges:updateModelChanges
+        };
+        var scopeChangesCache = {};
 
-	function ngChangeTracker() {
-		var _defaultMessage = 'If you leave this page, you will lose all changes you have made on current page.';
+        function watch(scope, target, ignored, isRestricted) {
+            //Wrap ignored
+            var ignoredList = [];
+            if (angular.isArray(ignored)) {
+                ignoredList = ignored;
+            } else if (ignored) {
+                ignoredList.push(ignored);
+            }
 
-		var factory = {
-			factory.watch: watch,
-				factory.rewatch: rewatch,
-				factory.reset: reset,
-				factory.clear: clear,
-				factory.clearAll: clearAll,
-				factory.hasChanges: hasChanges,
-				factory.hasChangesOnScope: hasChangesOnScope,
-				factory.interceptOnScope: interceptOnScope,
-				factory.intercept: intercept,
-				factory.onNavigateAway: onNavigateAway
-		};
+            if (angular.isArray(target)) {
+                for (var index in target) {
+                    var modelName = target[index];
+                    if (angular.isString(modelName)) {
+                        watchModel(scope, modelName, ignoredList, isRestricted);
+                    } else {
+                        $log.error('Invalide model name:' + target[index]);
+                    }
+                }
+            } else if (angular.isString(target)) {
+                watchModel(scope, target, ignoredList, isRestricted);
+            } else {
+                $log.error('Invalide model name:' + target);
+            }
+        }
 
-		factory.scopeChangeMap = {};
-		return factory;
+        function watchModel(scope, modelName, ignoredList, isRestricted) {
+            // Register scope if not exist in scopeChangesCache
+            if (angular.isUndefined(scopeChangesCache[scope.$id])) {
+                scopeChangesCache[scope.$id] = {
+                    hasChanges: false,
+                    scope: scope
+                };
+            }
 
-		function watch(scope, tragets, ignored,weakCheck) {
-			if (angular.isArray(tragets)) {
-				for (var index in tragets) {
-					var modelName = tragets[index];
-					if (angular.isString(modelName)) {
-						watchModel(scope, modelName, ignored,weakCheck);
-					} else {
-						console.log('Invalide model name:' + tragets[index]);
-					}
-				}
-			} else if (angular.isString(tragets)) {
-				watchModel(scope, tragets, ignored,weakCheck);
-			} else {
-				console.log('Invalide model name:' + tragets);
-			}
-		}
+            //Add a change tracker on scope if not exist
+            if (angular.isUndefined(scope.tracker)) {
+                scope.tracker = {};
+            }
 
-		function rewatch(scope, tragets, ignored,weakCheck) {
-			clear(scope);
-			watch(scope, tragets, ignoredProperties,weakCheck);
-		}
+            //Remove old watcher on the tracker if it has been watched
+            if (scope.tracker[modelName] && scope.tracker[modelName].unwatch) {
+                scope.tracker[modelName].unwatch();
+                delete scope.tracker[modelName];
+            }
 
-		function watchModel(scope, modelName, ignored,weakCheck) {
-			if (angular.isUndefined(factory.scopeChangeMap[scope.$id])) {
-				factory.scopeChangeMap[scope.$id] = {
-					hasChanges: false,
-					scope: scope
-				};
-			}
-			//Add a change tracker on scope 
-			if (angular.isUndefined(scope.tracker)) {
-				scope.tracker = {};
-			}
+            //Tracker model
+            scope.tracker[modelName] = {};
+            scope.tracker[modelName].original = angular.copy($$eval(scope, modelName));
+            scope.tracker[modelName].hasChanges = false;
+            scope.tracker[modelName].unwatch = scope.$watch(modelName, function (newValue, oldValue) {
+                if (newValue !== oldValue) {
+                    //$log.debug(modelName + ' is changed, new value: ' + newValue + ', old value: ' + oldValue);
+                    updateModelChanges(scope, modelName, ignoredList, isRestricted);
+                }
+            }, true);
 
-			//Remove old watch on the tracker
-			if (scope.tracker[modelName] && scope.tracker[modelName].unwatch) {
-				scope.tracker[modelName].unwatch();
-			}
-
-			//Tracker model
-			var modelTracker = {};
-			modelTracker.original = angular.copy(evaluateModelValue(scope, modelName));
-			modelTracker.hasChanges = false;
-			modelTracker.unwatch = scope.$watch(modelName, function(newValue, oldValue) {
-				if (newValue != oldValue) {
-					var original = scope.tracker[model].original;
-					var current = evaluateModelValue(scope, model);
-					scope.tracker[model].hasChanges = !equals(current, original, ignored,weakCheck);
-					if (scope.tracker[model].hasChanges) {
-						scope.hasChanges = true;
-						onScopeChanged(scope);
-					} else {
-						scope.hasChanges = hasChangesOnScope(scope);
-						onScopeChanged(scope);
-					}
-				}
-			}, true);
-			scope.tracker[modelName] = modelTracker;
-
-			//Set scope change status
-			scope.hasChanges = hasChangesOnScope(scope);
-			onScopeChanged(scope);
-		}
+            //update scope change status
+            scope.hasChanges = hasChangesOnScope(scope);
+            updateScopeChangesCache(scope);
+        }
 
 
-		function evaluateModelValue(scope, modelName) {
-			var attributes = modelName.split('.');
-			if (attributes.length == 0)
-				return;
+        function $$eval(scope, modelName) {
+            var attributes = modelName.split('.');
+            if (attributes.length == 0)
+                return;
 
-			var current = null;
-			for (var i = 0; i < attributes.length; i++) {
-				if (i == 0) {
-					current = scope[attributes[i]];
-				} else {
-					current = current[attributes[i]];
-				}
-			}
-			return current;
-		}
+            var current = null;
+            for (var i = 0; i < attributes.length; i++) {
+                if (i == 0) {
+                    current = scope[attributes[i]];
+                } else {
+                    current = current[attributes[i]];
+                }
+            }
+            return current;
+        }
 
-		function reset() {
-			scope.hasChanges = false;
-			onScopeChangeTrackerChange(scope);
+        // Update watched model changes
+        function updateModelChanges(scope, modelName, ignoredList, isRestricted) {
 
-			angular.forEach(scope.tracker, function(value, key) {
-				var current = evaluateModelValue(scope, key);
-				value.original = angular.copy(current);
-				value.hasChanges = false;
-			});
-		}
+            var original = scope.tracker[modelName].original;
+            var current = $$eval(scope, modelName);
 
-		function clear(scope) {
-			scope.hasChanges = false;
-			onScopeChangeTrackerChange(scope);
+            // update model hasChanges
+            scope.tracker[modelName].hasChanges = !equals(current, original, ignoredList, isRestricted);
 
-			angular.forEach(scope.tracker, function(value, key) {
-				if (value.unwatch) {
-					value.unwatch();
-				}
-			});
-			scope.tracker = {};
-		}
+            // update scope hasChanges
+            if (scope.tracker[modelName].hasChanges) {
+                scope.hasChanges = true;
+                updateScopeChangesCache(scope);
+            } else {
+                scope.hasChanges = hasChangesOnScope(scope);
+                updateScopeChangesCache(scope);
+            }
+        }
 
-		function clearAll() {
-			for (var scopeId in factory.scopeChangeMap) {
-				var scope = scopeChangeMap[scopeId].scope
-				if (scope) {
-					clear(scope);
-				}
-			}
-		}
+        // Update scope changes in cache map
+        function updateScopeChangesCache(scope) {
+            if (angular.isUndefined(scopeChangesCache[scope.$id])) {
+                scopeChangesCache[scope.$id] = {
+                    hasChanges: false,
+                    scope: scope
+                };
+            }
+            scopeChangesCache[scope.$id].hasChanges = scope.hasChanges;
+        }
 
-		function hasChanges() {
-			for (var scopeId in factory.scopeChangeMap) {
-				if (scopeChangeMap[scopeId].hasChanges) {
-					return true;
-				}
-			}
-			return false;
-		}
+        // Check if exists changes in watched scope
+        function hasChangesOnScope(scope) {
+            for (var modelName in scope.tracker) {
+                var modelTracker = scope.tracker[modelName];
+                if (modelTracker.hasChanges) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
-		function hasChangesOnScope(scope) {
-			for (var modelName in scope.tracker) {
-				var modelTracker = scope.tracker[modelName];
-				if (modelTracker.hasChanges) {
-					return true;
-				}
-			}
-			return false;
-		}
+        // Check if exists changes in watch list
+        function hasChanges() {
+            for (var scopeId in scopeChangesCache) {
+                if (scopeChangesCache[scopeId].hasChanges) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
-		function onScopeChanged(scope) {
-			if (angular.isUndefined(factory.scopeChangeMap[scope.$id])) {
-				factory.scopeChangeMap[scope.$id] = {
-					hasChanges: false,
-					scope: scope
-				};
-			}
-			factory.scopeChangeMap[scope.$id].hasChanges = scope.hasChanges;
-		};
+        // Reset scope change tracker
+        function reset(scope) {
+            scope.hasChanges = false;
+            updateScopeChangesCache(scope);
 
+            angular.forEach(scope.tracker, function (modelTracker, modelName) {
+                var current = $$eval(scope, modelName)
+                modelTracker.original = angular.copy(current);
+                modelTracker.hasChanges = false;
+            });
+        }
 
-		function interceptOnScope(scope, confirmCallback, cancelCallback, confirmMessage) {
-			if (!confirmMessage) {
-				confirmMessage = _defaultMessage;
-			}
+        // Clear scope change tracker
+        function clear(scope) {
+            scope.hasChanges = false;
+            updateScopeChangesCache(scope);
 
-			if (scope.hasChanges) {
-				if (window.confirm(confirmMessage)) {
-					factory.clear(scope);
-					confirmCallback();
-				} else if (cancelCallback) {
-					cancelCallback();
-				}
-			} else {
-				confirmCallback();
-			}
-		}
+            var doUnwatch = function () {
+                angular.forEach(scope.tracker, function (modelTracker) {
+                    if (modelTracker.unwatch) {
+                        modelTracker.unwatch();
+                    }
+                });
+            };
 
-		function intercept(confirmCallback, cancelCallback, confirmMessage) {
-			if (!confirmMessage) {
-				confirmMessage = _defaultMessage;
-			}
+            // prevent clear parent scope tracker
+            if (scope.$parent && scope.$parent.tracker && scope.tracker && scope.tracker !== scope.$parent.tracker) {
+                doUnwatch();
+            } else if (!scope.$parent && scope.tracker) {
+                doUnwatch();
+            }
 
-			if (factory.hasChangesInAllScopes()) {
-				if (window.confirm(confirmMessage)) {
-					//clear all changes in scopes as it will log out
-					clearAll();
+            scope.tracker = {};
+        }
 
-					if (confirmCallback) {
-						confirmCallback();
-					}
-				} else if (cancelCallback) {
-					cancelCallback();
-				}
-			} else if (cancelCallback) {
-				cancelCallback();
-			}
-		}
-
-		function onNavigateAway(scope, confirmMessage) {
-			if (!confirmMessage) {
-				confirmMessage = _defaultMessage;
-			}
-
-			//state change start
-			scope.$on('$stateChangeStart', function(event) {
-				if (scope.hasChanges) {
-					if (!window.confirm(confirmMessage)) {
-						event.preventDefault();
-					}
-				}
-			});
-
-			//NATIVE DOM IE9+
-			function beforeUnload(e) {
-				if (scope.hasChanges) {
-					(e || window.event).returnValue = confirmMessage;
-					return confirmMessage;
-				}
-			};
-			angular.element(window).on('beforeunload', beforeUnload);
-
-			//destroy event
-			scope.$on('$destroy', function() {
-				delete factory.scopeChanges[scope.$id];
-				angular.element(window).off('beforeunload', beforeUnload);
-			});
-		}
+        // Clear all change trackers in watch list
+        function clearAll() {
+            for (var scopeId in scopeChangesCache) {
+                var scope = scopeChangesCache[scopeId].scope
+                if (scope) {
+                    clear(scope);
+                }
+            }
+        }
 
 
-		var toString = Object.prototype.toString;
+        //======================================
+        //     Customized equals methods
+        //======================================
 
-		function isRegExp(value) {
-			return toString.call(value) === '[object RegExp]';
-		}
+        var toString = Object.prototype.toString;
 
-		function isScope(obj) {
-			return obj && obj.$evalAsync && obj.$watch;
-		}
+        function isRegExp(value) {
+            return toString.call(value) === '[object RegExp]';
+        }
 
-		function isWindow(obj) {
-			return obj && obj.window === obj;
-		}
+        function isScope(obj) {
+            return obj && obj.$evalAsync && obj.$watch;
+        }
 
-		//change angularjs equals
-		function equals(o1, o2, ignored, weakCheck) {
-			if (o1 === o2) return true;
-			if (weakCheck) {
-				if (angular.isUndefined(o1) && o2 === '') return true;
-				if (angular.isUndefined(o2) && o1 === '') return true;
-				if (angular.isUndefined(o1) && o2 === null) return true;
-				if (angular.isUndefined(o2) && o1 === null) return true;
-				if (o1 === '' && o2 === null) return true;
-				if (o2 === '' && o1 === null) return true;
-			}
-			if (o1 === null || o2 === null) {
-				console.log('o1:' + o1 + ', o2:' + o2 + ' changed');
-				return false;
-			}
-			if (o1 !== o1 && o2 !== o2) return true; // NaN === NaN
-			var t1 = typeof o1,
-				t2 = typeof o2,
-				length, key, keySet;
+        function isWindow(obj) {
+            return obj && obj.window === obj;
+        }
 
-			var ignoredPropertyList = [];
-			if (ignored && angular.isArray(ignored)) {
-				ignoredPropertyList = ignored;
-			} else if (ignored) {
-				ignoredPropertyList.push(ignored);
-			}
+        //change angularjs equals
+        function equals(o1, o2, ignoredList, isRestricted) {
+            if (o1 === o2) return true;
 
-			if (t1 == t2) {
-				if (t1 == 'object') {
-					if (angular.isArray(o1)) {
-						if (!angular.isArray(o2)) {
-							console.log('o1:' + o1 + ', o2:' + o2 + ' changed');
-							return false;
-						}
-						if ((length = o1.length) == o2.length) {
-							for (key = 0; key < length; key++) {
-								//ingore key
-								if (ignoredPropertyList.indexOf(key) >= 0) continue;
+            if (!isRestricted) {
+                if (angular.isUndefined(o1) && o2 === '')
+                    return true;
 
-								if (!equals(o1[key], o2[key], ignoredPropertyList)) {
-									console.log('key:' + key + ',' + 'o1:' + o1[key] + ', o2:' + o2[key] + ' changed');
-									return false;
-								}
-							}
-							return true;
-						}
-					} else if (angular.isDate(o1)) {
-						if (!angular.isDate(o2)) {
-							console.log('o1:' + o1 + ', o2:' + o2 + ' changed');
-							return false;
-						}
-						return equals(o1.getTime(), o2.getTime(), ignoredPropertyList);
-					} else if (isRegExp(o1) && isRegExp(o2)) {
-						return o1.toString() == o2.toString();
-					} else {
-						if (isScope(o1) || isScope(o2) || isWindow(o1) || isWindow(o2) || angular.isArray(o2)) {
-							console.log('o1:' + o1 + ', o2:' + o2 + ' changed');
-							return false;
-						}
-						keySet = {};
-						for (key in o1) {
-							if (ignoredPropertyList.indexOf(key) >= 0) continue;
+                if (angular.isUndefined(o2) && o1 === '')
+                    return true;
 
-							if (key.charAt(0) === '$' || angular.isFunction(o1[key])) continue;
-							if (!equals(o1[key], o2[key], ignoredPropertyList)) {
-								console.log('key:' + key + ',' + 'o1:' + o1[key] + ', o2:' + o2[key] + ' changed');
-								return false;
-							}
-							keySet[key] = true;
-						}
-						for (key in o2) {
-							if (ignoredPropertyList.indexOf(key) >= 0) continue;
+                if (angular.isUndefined(o1) && o2 === null)
+                    return true;
 
-							if (!keySet.hasOwnProperty(key) &&
-								key.charAt(0) !== '$' &&
-								o2[key] !== undefined &&
-								!angular.isFunction(o2[key])) {
-								console.log('key:' + key + ',' + 'o1:' + o1 + ', o2:' + o2[key] + ' changed');
-								return false;
-							}
-						}
-						return true;
-					}
-				}
-			}
-			return false;
-		}
+                if (angular.isUndefined(o2) && o1 === null)
+                    return true;
 
-	}
+                if (o1 === '' && o2 === null)
+                    return true;
 
-})();
+                if (o2 === '' && o1 === null)
+                    return true;
+            }
+
+            if (o1 === null || o2 === null) {
+                return false;
+            }
+            if (o1 !== o1 && o2 !== o2) return true; // NaN === NaN
+            var t1 = typeof o1,
+                t2 = typeof o2,
+                length, key, keySet;
+
+
+            if (t1 == t2) {
+                if (t1 == 'object') {
+                    if (angular.isArray(o1)) {
+                        if (!angular.isArray(o2)) {
+                            return false;
+                        }
+                        if ((length = o1.length) == o2.length) {
+                            for (key = 0; key < length; key++) {
+                                //ingore key
+                                if (ignoredList.indexOf(key) >= 0) continue;
+
+                                if (!equals(o1[key], o2[key], ignoredList, isRestricted)) {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        }
+                    } else if (angular.isDate(o1)) {
+                        if (!angular.isDate(o2)) {
+                            return false;
+                        }
+                        return equals(o1.getTime(), o2.getTime(), ignoredList, isRestricted);
+                    } else if (isRegExp(o1) && isRegExp(o2)) {
+                        return o1.toString() == o2.toString();
+                    } else {
+                        if (isScope(o1) || isScope(o2) || isWindow(o1) || isWindow(o2) || angular.isArray(o2)) {
+                            return false;
+                        }
+                        keySet = {};
+                        for (key in o1) {
+                            if (ignoredList.indexOf(key) >= 0) continue;
+
+                            if (key.charAt(0) === '$' || angular.isFunction(o1[key])) continue;
+                            if (!equals(o1[key], o2[key], ignoredList, isRestricted)) {
+                                return false;
+                            }
+                            keySet[key] = true;
+                        }
+                        for (key in o2) {
+                            if (ignoredList.indexOf(key) >= 0) continue;
+
+                            if (!keySet.hasOwnProperty(key) &&
+                                key.charAt(0) !== '$' &&
+                                o2[key] !== undefined && !angular.isFunction(o2[key])) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        return exports;
+    })
+
+    .factory('changeReminder', function () {
+
+        var exports = {
+            interceptNavigation: interceptNavigation,
+            interceptSignout: interceptSignout,
+            onNavigateAway: onNavigateAway
+        };
+
+        var changeTrackerScopes = [];
+        var _confirmationMessage = 'It looks like you have been editing something. If you leave before saving, your changes will be lost.';
+
+        function interceptSignout(callback) {
+            callback = callback || angular.noop;
+            var changed = false;
+            for (var i = 0; i < changeTrackerScopes.length; i += 1) {
+                if (changeTrackerScopes[i].hasChanges) {
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (changed) {
+                if (window.confirm(_confirmationMessage)) {
+                    // set all $$dataChanged false before sign out, otherwise the reminder alert will show again.
+                    for (i = 0; i < changeTrackerScopes.length; i += 1) {
+                        if (changeTrackerScopes[i].hasChanges) {
+                            changeTrackerScopes[i].hasChanges = false;
+                        }
+                    }
+                    changeTrackerScopes = [];
+
+                    callback();
+                }
+            } else {
+                callback();
+            }
+        }
+
+        function interceptNavigation(scope, confirmCallback, cancelCallback) {
+            confirmCallback = confirmCallback || angular.noop;
+            cancelCallback = cancelCallback || angular.noop;
+
+            if (scope.hasChanges) {
+                if (window.confirm(_confirmationMessage)) {
+                    confirmCallback();
+                } else if (cancelCallback) {
+                    cancelCallback();
+                }
+            } else {
+                confirmCallback();
+            }
+        }
+
+        function onNavigateAway(scope) {
+            var scopeIndex = changeTrackerScopes.indexOf(scope);
+            if (scopeIndex === -1) {
+                changeTrackerScopes.push(scope);
+            }
+
+            //state change start
+            scope.$on('$stateChangeStart', function (event) {
+                if (scope.hasChanges) {
+                    if (!window.confirm(_confirmationMessage)) {
+                        event.preventDefault();
+                    }
+                }
+            });
+
+            //NATIVE DOM IE9+
+            function beforeUnload(e) {
+                if (scope.hasChanges) {
+                    (e || window.event).returnValue = _confirmationMessage;
+                    return _confirmationMessage;
+                }
+            }
+
+            angular.element(window).on('beforeunload', beforeUnload);
+
+            //destroy event
+            scope.$on('$destroy', function () {
+                // remove scope from changeTrackerScopes
+                scopeIndex = changeTrackerScopes.indexOf(scope);
+                if (scopeIndex > -1) {
+                    changeTrackerScopes.splice(scopeIndex, 1);
+                }
+
+                angular.element(window).off('beforeunload', beforeUnload);
+            });
+
+        }
+
+        return exports;
+    });
